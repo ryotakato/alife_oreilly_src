@@ -4,8 +4,11 @@ from enum import IntEnum
 
 class VehicleSimulator(object):
     COLLISION_TYPE = IntEnum("COLLISION_TYPE", "OBJECT VEHICLE LEFT_SENSOR RIGHT_SENSOR FEED")
+    FRAMERATE = 2
     DISPLAY_MARGIN = 10
+    #DISPLAY_MARGIN = 30
     ARENA_SIZE = 600
+    #ARENA_SIZE = 1800
 
     # simulation setting parameters
     VEHICLE_RADIUS = 20
@@ -13,9 +16,10 @@ class VehicleSimulator(object):
     SENSOR_RANGE = 80
     SENSOR_NOISE = 0
     MOTOR_NOISE = 1.0
-    FEED_COLOR = (0, 0, 0)
-    FEED_ACTIVE_COLOR = (255, 0, 0)
-    FEED_EATING_TIME = 200
+    FEED_COLOR = (0, 0, 0, 255)
+    FEED_ACTIVE_COLOR = (255, 0, 0, 255)
+    #FEED_EATING_TIME = 200
+    FEED_EATING_TIME = 100
 
     def __init__(self, width=600, height=600, obstacle_num=5, obstacle_radius=30, feed_num=0, feed_radius=5):
         import pyglet
@@ -25,17 +29,27 @@ class VehicleSimulator(object):
         self.__right_sensor_val = 0
         self.__feed_sensor_val = False
         self.__feed_touch_counter = {}
+        self.__feed_ate_counter = 0
         self.__feed_bodies = []
         self.__feed_radius = feed_radius
+        self.__did_eat_all_feed = False
 
         self.__window = pyglet.window.Window(self.ARENA_SIZE+self.DISPLAY_MARGIN*2, self.ARENA_SIZE+self.DISPLAY_MARGIN*2, vsync=False)
         self.__draw_options = pyglet_util.DrawOptions()
         self.__closed = False
+
+
+        label = pyglet.text.Label('Finish!', font_name='Times New Roman', font_size=72, color=(0, 0, 255, 255), 
+                                  x=self.__window.width//2, y=self.__window.height//2, anchor_x='center', anchor_y='center')
+
+
         @self.__window.event
         def on_draw():
             pyglet.gl.glClearColor(255,255,255,255)
             self.__window.clear()
             self.__simulation_space.debug_draw(self.__draw_options)
+            if self.__did_eat_all_feed:
+              label.draw()
 
         @self.__window.event
         def on_close():
@@ -53,7 +67,8 @@ class VehicleSimulator(object):
         for w in walls:
             w.collision_type = self.COLLISION_TYPE.OBJECT
             w.friction = 0.2
-        self.__simulation_space.add(walls)
+            self.__simulation_space.add(w)
+        #self.__simulation_space.add(walls)
 
         # vehicle
         mass = 1
@@ -67,28 +82,33 @@ class VehicleSimulator(object):
         sensor_l_s = Segment(self.__vehicle_body, (0, 0), (self.SENSOR_RANGE * np.cos(self.SENSOR_ANGLE), self.SENSOR_RANGE * np.sin(self.SENSOR_ANGLE)), 0)
         sensor_l_s.sensor = True
         sensor_l_s.collision_type = self.COLLISION_TYPE.LEFT_SENSOR
-        handler_l = self.__simulation_space.add_collision_handler(self.COLLISION_TYPE.LEFT_SENSOR, self.COLLISION_TYPE.OBJECT)
-        handler_l.pre_solve = self.__left_sensr_handler
-        handler_l.separate = self.__left_sensr_separate_handler
+        self.__simulation_space.on_collision(self.COLLISION_TYPE.LEFT_SENSOR, self.COLLISION_TYPE.OBJECT, pre_solve=self.__left_sensr_handler, separate=self.__left_sensr_separate_handler)
+        #handler_l = self.__simulation_space.add_collision_handler(self.COLLISION_TYPE.LEFT_SENSOR, self.COLLISION_TYPE.OBJECT)
+        #handler_l.pre_solve = self.__left_sensr_handler
+        #handler_l.separate = self.__left_sensr_separate_handler
         self.__simulation_space.add(sensor_l_s)
 
         # right sensor
         sensor_r_s = Segment(self.__vehicle_body, (0, 0), (self.SENSOR_RANGE * np.cos(-self.SENSOR_ANGLE), self.SENSOR_RANGE * np.sin(-self.SENSOR_ANGLE)), 0)
         sensor_r_s.sensor = True
         sensor_r_s.collision_type = self.COLLISION_TYPE.RIGHT_SENSOR
-        handler_r = self.__simulation_space.add_collision_handler(self.COLLISION_TYPE.RIGHT_SENSOR, self.COLLISION_TYPE.OBJECT)
-        handler_r.pre_solve = self.__right_sensr_handler
-        handler_r.separate = self.__right_sensr_separate_handler
+        self.__simulation_space.on_collision(self.COLLISION_TYPE.RIGHT_SENSOR, self.COLLISION_TYPE.OBJECT, pre_solve=self.__right_sensr_handler, separate=self.__right_sensr_separate_handler)
+        #handler_r = self.__simulation_space.add_collision_handler(self.COLLISION_TYPE.RIGHT_SENSOR, self.COLLISION_TYPE.OBJECT)
+        #handler_r.pre_solve = self.__right_sensr_handler
+        #handler_r.separate = self.__right_sensr_separate_handler
         self.__simulation_space.add(sensor_r_s)
 
         # obstacles
+        from pymunk.vec2d import Vec2d
         for a in (np.linspace(0, np.pi*2, obstacle_num, endpoint=False) + np.pi/2):
             body = Body(body_type=Body.STATIC)
-            body.position = (self.DISPLAY_MARGIN+self.ARENA_SIZE/2+self.ARENA_SIZE*0.3*np.cos(a), self.DISPLAY_MARGIN+self.ARENA_SIZE/2+self.ARENA_SIZE*0.3*np.sin(a))
+            nd = (self.DISPLAY_MARGIN+self.ARENA_SIZE/2+self.ARENA_SIZE*0.3*np.cos(a), self.DISPLAY_MARGIN+self.ARENA_SIZE/2+self.ARENA_SIZE*0.3*np.sin(a))
+            body.position = Vec2d(nd[0], nd[1])
             shape = Circle(body, obstacle_radius)
             shape.friction = 0.2
             shape.collision_type = self.COLLISION_TYPE.OBJECT
-            self.__simulation_space.add(shape)
+            #self.__simulation_space.add(shape)
+            self.__simulation_space.add(shape.body, shape)
 
         for i in range(feed_num):
             body = Body(1, 1)
@@ -97,9 +117,10 @@ class VehicleSimulator(object):
             shape.sensor = True
             shape.color = self.FEED_COLOR
             shape.collision_type = self.COLLISION_TYPE.FEED
-            handler = self.__simulation_space.add_collision_handler(self.COLLISION_TYPE.VEHICLE, self.COLLISION_TYPE.FEED)
-            handler.pre_solve = self.__feed_touch_handler
-            handler.separate = self.__feed_separate_handler
+            self.__simulation_space.on_collision(self.COLLISION_TYPE.VEHICLE, self.COLLISION_TYPE.FEED, pre_solve=self.__feed_touch_handler, separate=self.__feed_separate_handler)
+            #handler = self.__simulation_space.add_collision_handler(self.COLLISION_TYPE.VEHICLE, self.COLLISION_TYPE.FEED)
+            #handler.pre_solve = self.__feed_touch_handler
+            #handler.separate = self.__feed_separate_handler
             self.__simulation_space.add(body, shape)
             self.__feed_touch_counter[shape] = 0
 
@@ -109,8 +130,11 @@ class VehicleSimulator(object):
         np.random.seed(random_seed)
         self.__vehicle_body.position = self.ARENA_SIZE/2+self.DISPLAY_MARGIN, self.ARENA_SIZE/2+self.DISPLAY_MARGIN
         self.__vehicle_body.angle = 0
+
+        from pymunk.vec2d import Vec2d
         for b in self.__feed_bodies:
-            b.position = self.DISPLAY_MARGIN + self.__feed_radius + np.random.rand(2) * (self.ARENA_SIZE - self.__feed_radius*2)
+            nd = self.DISPLAY_MARGIN + self.__feed_radius + np.random.rand(2) * (self.ARENA_SIZE - self.__feed_radius*2)
+            b.position = Vec2d(nd[0], nd[1])
 
     def update(self, action):
         self.__vehicle_body.velocity = (0, 0)
@@ -122,7 +146,7 @@ class VehicleSimulator(object):
         self.__vehicle_body.apply_impulse_at_local_point((velocity_r*self.__vehicle_body.mass, 0), (0, -self.VEHICLE_RADIUS))
         lf = self.__get_lateral_velocity() * self.__vehicle_body.mass
         self.__vehicle_body.apply_impulse_at_local_point(-lf, (0,0))
-        self.__simulation_space.step(1/100)
+        self.__simulation_space.step(0.01 * self.FRAMERATE)
 
         from pyglet import clock
         clock.tick()
@@ -140,16 +164,27 @@ class VehicleSimulator(object):
         return sensor_data
 
     def set_bodycolor(self, color):
-        assert len(color) == 3
+        assert len(color) == 4
         self.__vehicle_shape.color = color
+
+    def did_eat_all_feed(self):
+      if self.__feed_ate_counter == len(self.__feed_touch_counter):
+        self.__did_eat_all_feed = True
+      return self.__did_eat_all_feed
+
+
 
     def __feed_touch_handler(self, arbiter, space, data):
         feed = arbiter.shapes[1]
         feed.color = self.FEED_ACTIVE_COLOR
         self.__feed_touch_counter[feed] += 1
         self.__feed_sensor_val = True
+        from pymunk.vec2d import Vec2d
         if (self.__feed_touch_counter[feed] > self.FEED_EATING_TIME):
-            feed.body.position = self.DISPLAY_MARGIN + feed.radius/2 + np.random.rand(2) * (self.ARENA_SIZE - feed.radius)
+            #nd = self.DISPLAY_MARGIN + feed.radius/2 + np.random.rand(2) * (self.ARENA_SIZE - feed.radius)
+            #feed.body.position = Vec2d(nd[0], nd[1])
+            feed.body.position = Vec2d(-100, -100)
+            self.__feed_ate_counter = self.__feed_ate_counter + 1
         return True
 
     def __feed_separate_handler(self, arbiter, space, data):
@@ -161,7 +196,8 @@ class VehicleSimulator(object):
 
     def __left_sensr_handler(self, arbiter, space, data):
         p = arbiter.contact_point_set.points[0]
-        distance = self.__vehicle_body.world_to_local(p.point_b).get_length()
+        #distance = self.__vehicle_body.world_to_local(p.point_b).get_length()
+        distance = self.__vehicle_body.world_to_local(p.point_b).length
         self.__left_sensor_val = 1 - distance / self.SENSOR_RANGE
         self.__left_sensor_val += self.SENSOR_NOISE * np.random.randn()
         return True
@@ -172,7 +208,8 @@ class VehicleSimulator(object):
 
     def __right_sensr_handler(self, arbiter, space, data):
         p = arbiter.contact_point_set.points[0]
-        distance = self.__vehicle_body.world_to_local(p.point_b).get_length()
+        #distance = self.__vehicle_body.world_to_local(p.point_b).get_length()
+        distance = self.__vehicle_body.world_to_local(p.point_b).length
         self.__right_sensor_val = 1 - distance / self.SENSOR_RANGE
         self.__right_sensor_val += self.SENSOR_NOISE * np.random.randn()
         return True
